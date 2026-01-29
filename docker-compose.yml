@@ -1,0 +1,164 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: scalable_rag_postgres
+    environment:
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: rag_password
+      POSTGRES_DB: rag_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    container_name: scalable_rag_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: scalable_rag_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: scalable_rag_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: scalable_rag_api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://rag_user:rag_password@postgres:5432/rag_db
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: documents
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./api:/app
+      - ./shared:/app/shared
+
+  text_worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    container_name: scalable_rag_text_worker
+    environment:
+      DATABASE_URL: postgresql://rag_user:rag_password@postgres:5432/rag_db
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: documents
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    volumes:
+      - ./workers:/app
+      - ./shared:/app/shared
+    command: python -m workers.text_extractor.worker
+
+  chunk_worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    container_name: scalable_rag_chunk_worker
+    environment:
+      DATABASE_URL: postgresql://rag_user:rag_password@postgres:5432/rag_db
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: documents
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    volumes:
+      - ./workers:/app
+      - ./shared:/app/shared
+    command: python -m workers.chunker.worker
+
+  embed_worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    container_name: scalable_rag_embed_worker
+    environment:
+      DATABASE_URL: postgresql://rag_user:rag_password@postgres:5432/rag_db
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: documents
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+      - minio
+    volumes:
+      - ./workers:/app
+      - ./shared:/app/shared
+    command: python -m workers.embedder.worker
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  redis_data:
+  minio_data:
