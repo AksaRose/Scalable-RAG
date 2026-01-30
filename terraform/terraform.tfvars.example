@@ -1,0 +1,52 @@
+# =============================================================================
+# Terraform Variables Example File
+# Copy this to terraform.tfvars and customize for your deployment
+# =============================================================================
+
+# Project Configuration
+project_name = "scalable-rag"
+environment  = "dev"
+aws_region   = "us-east-1"
+
+# VPC Configuration
+vpc_cidr           = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+# Database Configuration
+db_instance_class    = "db.t3.micro"     # Use db.t3.small or larger for production
+db_name              = "rag_db"
+db_username          = "rag_user"
+db_password          = "CHANGE_ME_SECURE_PASSWORD_123!"  # CHANGE THIS!
+db_allocated_storage = 20                # GB
+
+# Redis Configuration
+redis_node_type       = "cache.t3.micro"  # Use cache.t3.small or larger for production
+redis_num_cache_nodes = 1                 # Use 2+ for production HA
+
+# Qdrant Configuration
+qdrant_instance_type = "t3.medium"  # Use t3.large or larger for production
+qdrant_volume_size   = 50           # GB - increase for more vectors
+
+# ECS API Configuration
+api_cpu           = 512   # 0.5 vCPU
+api_memory        = 1024  # 1 GB
+api_desired_count = 2     # Number of API instances
+
+# ECS Worker Configuration
+worker_cpu    = 1024  # 1 vCPU
+worker_memory = 2048  # 2 GB (embedding models need memory)
+
+# Worker Counts (adjust based on workload)
+text_worker_count  = 1
+chunk_worker_count = 1
+embed_worker_count = 2  # Increase for higher throughput
+
+# Application Configuration
+embedding_model        = "BAAI/bge-small-en-v1.5"
+internal_service_token = ""  # Leave empty to auto-generate, or set your own
+
+# Additional Tags
+tags = {
+  Owner       = "your-team"
+  CostCenter  = "engineering"
+}

@@ -100,3 +100,55 @@ class StorageService:
             return True
         except S3Error:
             return False
+    
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete all objects with a given prefix.
+        
+        Args:
+            prefix: Object prefix (e.g., "tenant_id/document_id/")
+            
+        Returns:
+            Number of objects deleted
+        """
+        try:
+            objects = self.client.list_objects(
+                config.MINIO_BUCKET,
+                prefix=prefix,
+                recursive=True
+            )
+            
+            deleted = 0
+            for obj in objects:
+                self.client.remove_object(config.MINIO_BUCKET, obj.object_name)
+                deleted += 1
+                logger.info(f"Deleted object: {obj.object_name}")
+            
+            return deleted
+        except S3Error as e:
+            logger.error(f"Error deleting prefix {prefix}: {e}")
+            raise
+    
+    def get_prefix_size(self, prefix: str) -> int:
+        """Get total size of all objects with a given prefix.
+        
+        Args:
+            prefix: Object prefix
+            
+        Returns:
+            Total size in bytes
+        """
+        try:
+            objects = self.client.list_objects(
+                config.MINIO_BUCKET,
+                prefix=prefix,
+                recursive=True
+            )
+            
+            total_size = 0
+            for obj in objects:
+                total_size += obj.size
+            
+            return total_size
+        except S3Error as e:
+            logger.error(f"Error getting prefix size {prefix}: {e}")
+            return 0

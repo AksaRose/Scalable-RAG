@@ -58,7 +58,7 @@ sequenceDiagram
 
     Queue->>EmbedWorker: Dequeue Embed Job
     EmbedWorker->>Storage: Download Chunk
-    EmbedWorker->>OpenAI: Generate Embedding
+    EmbedWorker->>EmbedWorker: Generate Embedding (local model)
     EmbedWorker->>Storage: Store Parquet
     EmbedWorker->>Qdrant: Upsert Vector
     EmbedWorker->>Postgres: Update Status
@@ -95,11 +95,11 @@ graph LR
 
 ### Workers
 - **Text Extractor**: PDF/TXT extraction using pypdf
-- **Chunker**: Overlapping semantic chunking
-- **Embedder**: OpenAI embedding generation
+- **Chunker**: Overlapping semantic chunking with sentence-aware breaking
+- **Embedder**: Local embedding generation using sentence-transformers (BAAI/bge-small-en-v1.5)
 
 ### Storage
 - **PostgreSQL**: Metadata and job tracking
-- **Qdrant**: Vector database (1536 dimensions)
-- **MinIO**: Object storage for files
-- **Redis**: Job queue with sorted sets
+- **Qdrant**: Vector database (384 dimensions with BAAI/bge-small-en-v1.5)
+- **MinIO**: Object storage for files and intermediate data (Parquet)
+- **Redis**: Job queue with sorted sets for per-tenant fairness

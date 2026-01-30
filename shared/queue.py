@@ -6,10 +6,12 @@ from shared.config import config
 
 
 class QueueClient:
-    """Redis queue client for job management."""
+    """Redis queue client for job management with fair round-robin scheduling."""
     
     def __init__(self):
         self.redis_client = redis.from_url(config.REDIS_URL, decode_responses=True)
+        # Track last served tenant for true round-robin fairness
+        self._last_served_index = {}
     
     def enqueue_job(
         self,
@@ -70,18 +72,25 @@ class QueueClient:
             if result:
                 return json.loads(result[0][0])
         else:
-            # Round-robin across all tenant queues for fairness
+            # True round-robin across all tenant queues for fairness
             # Get all tenant queues for this job type
             pattern = f"queue:*:{job_type}"
-            queues = self.redis_client.keys(pattern)
+            queues = sorted(self.redis_client.keys(pattern))  # Sort for consistent ordering
             
             if not queues:
                 return None
             
-            # Try each queue in round-robin fashion
-            for queue_name in queues:
+            # Get the last served index for this job type
+            last_idx = self._last_served_index.get(job_type, -1)
+            
+            # Try each queue starting from next in round-robin order
+            for i in range(len(queues)):
+                idx = (last_idx + 1 + i) % len(queues)
+                queue_name = queues[idx]
                 result = self.redis_client.zpopmax(queue_name, count=1)
                 if result:
+                    # Update last served index
+                    self._last_served_index[job_type] = idx
                     return json.loads(result[0][0])
         
         return None

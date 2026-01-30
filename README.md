@@ -74,9 +74,23 @@ This will start:
 
 ### Authentication
 
-All endpoints require an API key in the `X-API-Key` header.
+The system has **two authentication mechanisms**:
+
+#### 1. Tenant Authentication (External Customers)
+- **Header**: `X-API-Key`
+- **Scope**: Own tenant's documents only
+- **Endpoints**: Upload, Search, Status
 
 Default test tenant API key: `test_api_key_123`
+
+#### 2. Internal Service Authentication (System Components)
+- **Header**: `X-Internal-Token`
+- **Scope**: Cross-tenant access (elevated privileges)
+- **Endpoints**: Admin, Stats, Tenant Management
+
+Default internal token: `internal_service_secret_token`
+
+### Tenant Endpoints
 
 ### Upload a Single File
 
@@ -125,6 +139,45 @@ Response:
 }
 ```
 
+### Delete a Document
+
+```bash
+curl -X DELETE "http://localhost:8000/documents/{document_id}" \
+  -H "X-API-Key: test_api_key_123"
+```
+
+Response:
+```json
+{
+  "document_id": "uuid",
+  "deleted": true,
+  "message": "Document and all associated data deleted successfully",
+  "chunks_deleted": 5,
+  "vectors_deleted": 5
+}
+```
+
+### Get Tenant Metrics
+
+```bash
+curl -X GET "http://localhost:8000/metrics/me" \
+  -H "X-API-Key: test_api_key_123"
+```
+
+Response:
+```json
+{
+  "tenant_id": "uuid",
+  "tenant_name": "test_tenant",
+  "document_count": 10,
+  "chunk_count": 50,
+  "storage_used_bytes": 1048576,
+  "last_upload": "2026-01-30T12:00:00Z",
+  "rate_limit": 100,
+  "current_rate": 5
+}
+```
+
 ### Search Documents
 
 ```bash
@@ -145,6 +198,7 @@ Response:
     {
       "chunk_id": "uuid",
       "document_id": "uuid",
+      "tenant_id": "uuid",
       "filename": "document.pdf",
       "text": "Machine learning is...",
       "score": 0.95,
@@ -154,6 +208,58 @@ Response:
   "total": 1,
   "query": "What is machine learning?"
 }
+```
+
+### Internal Service Endpoints
+
+These endpoints require `X-Internal-Token` header and provide cross-tenant access for system services.
+
+#### Create a New Tenant
+
+```bash
+curl -X POST "http://localhost:8000/internal/tenants" \
+  -H "X-Internal-Token: internal_service_secret_token" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "new_customer", "rate_limit": 100}'
+```
+
+Response:
+```json
+{
+  "tenant_id": "uuid",
+  "name": "new_customer",
+  "api_key": "new_customer_ABC123...",
+  "rate_limit": 100,
+  "message": "Save the API key - shown only once!"
+}
+```
+
+#### List All Tenants
+
+```bash
+curl "http://localhost:8000/internal/tenants" \
+  -H "X-Internal-Token: internal_service_secret_token"
+```
+
+#### Get System Statistics
+
+```bash
+curl "http://localhost:8000/internal/stats" \
+  -H "X-Internal-Token: internal_service_secret_token"
+```
+
+#### Cross-Tenant Document Search (Internal Only)
+
+```bash
+curl -X POST "http://localhost:8000/internal/search?query=machine+learning&limit=10" \
+  -H "X-Internal-Token: internal_service_secret_token"
+```
+
+#### List All Documents (Cross-Tenant)
+
+```bash
+curl "http://localhost:8000/internal/documents?limit=50" \
+  -H "X-Internal-Token: internal_service_secret_token"
 ```
 
 ## Project Structure

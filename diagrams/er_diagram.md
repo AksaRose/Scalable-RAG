@@ -61,7 +61,7 @@ erDiagram
 graph TB
     Collection[document_chunks Collection]
     
-    Collection --> Vector[Vector: 1536 dimensions]
+    Collection --> Vector[Vector: 384 dimensions]
     Collection --> Payload[Payload Metadata]
     
     Payload --> TenantID[tenant_id: string]

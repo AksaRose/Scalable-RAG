@@ -1,9 +1,9 @@
 """Shared data models."""
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class DocumentStatus(str, Enum):
@@ -103,6 +103,7 @@ class SearchResult(BaseModel):
     """Search result model."""
     chunk_id: UUID
     document_id: UUID
+    tenant_id: UUID  # Added: Reference to source tenant
     filename: str
     text: str
     score: float
@@ -122,3 +123,78 @@ class StatusResponse(BaseModel):
     status: str
     progress: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+
+# ============== Webhook Support ==============
+
+class WebhookConfig(BaseModel):
+    """Webhook configuration for async notifications."""
+    url: HttpUrl = Field(..., description="URL to receive webhook notifications")
+    secret: Optional[str] = Field(None, description="Secret for HMAC signature verification")
+    events: List[str] = Field(
+        default=["completed", "failed"],
+        description="Events to notify: completed, failed, processing"
+    )
+
+
+class UploadRequestWithWebhook(BaseModel):
+    """Upload request with optional webhook."""
+    webhook: Optional[WebhookConfig] = None
+
+
+class WebhookPayload(BaseModel):
+    """Payload sent to webhook URL."""
+    event: str  # completed, failed, processing
+    document_id: UUID
+    tenant_id: UUID
+    filename: str
+    status: str
+    timestamp: datetime
+    error: Optional[str] = None
+    chunks_count: Optional[int] = None
+
+
+# ============== Metrics & Observability ==============
+
+class SystemMetrics(BaseModel):
+    """System-wide metrics."""
+    total_documents: int
+    total_chunks: int
+    total_tenants: int
+    documents_by_status: Dict[str, int]
+    avg_processing_time_seconds: Optional[float] = None
+    queue_depths: Dict[str, int]
+    storage_used_bytes: Optional[int] = None
+
+
+class TenantMetrics(BaseModel):
+    """Per-tenant metrics."""
+    tenant_id: UUID
+    tenant_name: str
+    document_count: int
+    chunk_count: int
+    storage_used_bytes: Optional[int] = None
+    last_upload: Optional[datetime] = None
+    rate_limit: int
+    current_rate: int  # Requests in current window
+
+
+# ============== Document Management ==============
+
+class DocumentDeleteResponse(BaseModel):
+    """Response for document deletion."""
+    document_id: UUID
+    deleted: bool
+    message: str
+    chunks_deleted: int = 0
+    vectors_deleted: int = 0
+
+
+class TenantQuota(BaseModel):
+    """Tenant quota/limits."""
+    tenant_id: UUID
+    max_documents: Optional[int] = None  # None = unlimited
+    max_storage_bytes: Optional[int] = None
+    current_documents: int
+    current_storage_bytes: int
+    usage_percentage: float

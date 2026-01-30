@@ -1,22 +1,60 @@
-"""Upload routes."""
+"""Upload routes with rate limiting."""
 import os
 import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Header
 from typing import List, Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import redis
 from shared.config import config
 from shared.models import UploadResponse, BulkUploadResponse
 from shared.queue import QueueClient
 from services.auth import AuthService
 from services.storage import StorageService
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
-# Dependency for getting current tenant
+# Redis client for rate limiting
+_rate_limit_redis = redis.from_url(config.REDIS_URL, decode_responses=True)
+
+
+def check_rate_limit(tenant_id: str, rate_limit: int) -> bool:
+    """Check if tenant is within rate limit using sliding window.
+    
+    Args:
+        tenant_id: Tenant ID
+        rate_limit: Max requests per minute
+        
+    Returns:
+        True if within limit, raises HTTPException if exceeded
+    """
+    key = f"rate_limit:{tenant_id}"
+    current_time = int(time.time())
+    window_start = current_time - 60  # 1 minute window
+    
+    # Remove old entries
+    _rate_limit_redis.zremrangebyscore(key, 0, window_start)
+    
+    # Count requests in current window
+    current_count = _rate_limit_redis.zcard(key)
+    
+    if current_count >= rate_limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded. Maximum {rate_limit} requests per minute."
+        )
+    
+    # Add current request
+    _rate_limit_redis.zadd(key, {f"{current_time}:{uuid.uuid4()}": current_time})
+    _rate_limit_redis.expire(key, 120)  # Expire after 2 minutes
+    
+    return True
+
+
 def get_current_tenant(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) -> dict:
     """Get current tenant from API key."""
     if not x_api_key:
@@ -34,6 +72,9 @@ def get_current_tenant(x_api_key: Optional[str] = Header(None, alias="X-API-Key"
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key"
         )
+    
+    # Enforce rate limit
+    check_rate_limit(tenant['tenant_id'], tenant.get('rate_limit', 100))
     
     return tenant
 
@@ -68,10 +109,13 @@ async def upload_single_file(
     tenant_id = tenant['tenant_id']
     file_path = f"{tenant_id}/{document_id}/{file.filename}"
     
+    conn = None
     try:
         # Upload to object storage
+        logger.info(f"Uploading file to storage: {file_path}")
         storage_service = StorageService()
         storage_service.upload_file(file_content, file_path)
+        logger.info(f"File uploaded to storage successfully")
         
         # Create document record in database
         conn = psycopg2.connect(config.DATABASE_URL)
@@ -86,8 +130,10 @@ async def upload_single_file(
             )
             result = cur.fetchone()
             conn.commit()
+        logger.info(f"Document record created in database")
         
         # Enqueue extraction job
+        logger.info(f"Enqueueing extraction job for document: {document_id}")
         queue_client = QueueClient()
         queue_client.enqueue_job(
             job_type="extract",
@@ -95,6 +141,7 @@ async def upload_single_file(
             document_id=str(document_id),
             payload={"file_path": file_path, "filename": file.filename}
         )
+        logger.info(f"Extraction job enqueued successfully")
         
         return UploadResponse(
             document_id=document_id,
@@ -103,7 +150,14 @@ async def upload_single_file(
             message="File uploaded successfully and queued for processing"
         )
     except Exception as e:
-        logger.error(f"Error uploading file: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error uploading file: {e}\n{error_trace}")
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error uploading file: {str(e)}"

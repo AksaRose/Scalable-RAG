@@ -142,6 +142,19 @@ class ChunkerWorker:
                 text_data = self.storage_service.download_file(text_path)
                 text = text_data.decode('utf-8')
                 
+                # Check if chunks already exist (idempotency)
+                with self.db_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM chunks WHERE document_id = %s",
+                        (document_id,)
+                    )
+                    existing_count = cur.fetchone()[0]
+                
+                if existing_count > 0:
+                    logger.info(f"Chunks already exist for document {document_id}, skipping chunking")
+                    self.update_job_status(job_id, "completed")
+                    return
+                
                 # Chunk the text
                 chunks = self.chunk_text(text)
                 

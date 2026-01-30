@@ -17,7 +17,7 @@ class QdrantService:
         self._ensure_collection_exists()
     
     def _ensure_collection_exists(self):
-        """Ensure the collection exists."""
+        """Ensure the collection exists with proper indexes."""
         try:
             collections = self.client.get_collections().collections
             collection_names = [c.name for c in collections]
@@ -31,6 +31,14 @@ class QdrantService:
                     )
                 )
                 logger.info(f"Created collection: {self.collection_name}")
+                
+                # Create payload index on tenant_id for fast filtering at scale
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="tenant_id",
+                    field_schema="keyword"
+                )
+                logger.info(f"Created payload index on tenant_id")
         except Exception as e:
             logger.error(f"Error ensuring collection exists: {e}")
             raise

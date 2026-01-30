@@ -78,6 +78,7 @@ async def search_documents(
                 SearchResult(
                     chunk_id=result['id'],
                     document_id=payload.get('document_id'),
+                    tenant_id=payload.get('tenant_id'),  # Added: Source tenant reference
                     filename=payload.get('filename', 'Unknown'),
                     text=payload.get('text', ''),
                     score=result['score'],

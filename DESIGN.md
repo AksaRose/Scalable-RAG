@@ -65,9 +65,17 @@ Upload → API → Object Storage → Queue → Text Extractor → Chunker → E
 
 ### 3. Embedding Strategy
 
-**Decision**: OpenAI embeddings with batch processing and intermediate storage
+**Decision**: Open-source embeddings with batch processing and intermediate storage
 
-**Model**: `text-embedding-3-small` (1536 dimensions)
+**Model**: `BAAI/bge-small-en-v1.5` (384 dimensions) via sentence-transformers
+- No API costs
+- Self-hosted for privacy
+- Configurable via `EMBEDDING_MODEL` environment variable
+
+**Alternative Models Supported**:
+- `all-MiniLM-L6-v2`
+- `all-mpnet-base-v2`
+- `BAAI/bge-base-en-v1.5`
 
 **Batch Processing**: 100-500 chunks per batch
 
@@ -76,16 +84,21 @@ Upload → API → Object Storage → Queue → Text Extractor → Chunker → E
 
 ### 4. Fairness Mechanism
 
-**Decision**: Per-tenant queues with round-robin scheduling
+**Decision**: Per-tenant queues with round-robin scheduling ✅ **Implemented**
 
 **Implementation**:
-- Separate Redis sorted sets per tenant and job type
-- Workers dequeue in round-robin across tenant queues
-- Priority-based processing within tenant queues
+- Separate Redis sorted sets per tenant and job type (`queue:{tenant_id}:{job_type}`)
+- Workers dequeue in true round-robin across tenant queues (tracks last served tenant)
+- Priority-based processing within tenant queues (higher score = higher priority)
 
-**Rate Limiting**: Token bucket algorithm (configurable per tenant)
+**Rate Limiting**: Sliding window algorithm (configurable per tenant) ✅ **Implemented**
+- Uses Redis sorted sets to track requests per tenant
+- 1-minute sliding window with configurable limit per tenant
+- Returns HTTP 429 when limit exceeded
 
-**Bulk Upload Handling**: Throttled to prevent starvation
+**Bulk Upload Handling**: 
+- Maximum 100 files per bulk upload
+- Each file enqueued separately for parallel processing
 
 ### 5. Queue System
 
@@ -101,36 +114,152 @@ Upload → API → Object Storage → Queue → Text Extractor → Chunker → E
 
 ### 6. Authentication
 
-**Decision**: API key-based authentication
+**Decision**: Dual authentication system (Tenant + Internal Service)
 
-**Implementation**:
-- API key in `X-API-Key` header
-- SHA-256 hashing (prototype)
-- Tenant lookup on each request
+#### Tenant Authentication (External Customers)
+- **Header**: `X-API-Key`
+- **Method**: SHA-256 hashing (prototype)
+- **Flow**: API key → hash → lookup in `tenants` table
+- **Scope**: Upload, Search, Status endpoints
+- **Data Access**: **Own tenant data only** (strict isolation)
 
-**Production Upgrade**: JWT/OAuth2 with proper key hashing (bcrypt)
+#### Internal Service Authentication (System Components)
+- **Header**: `X-Internal-Token`
+- **Method**: SHA-256 hashing
+- **Flow**: Service token → hash → compare with env variable
+- **Scope**: Admin endpoints (`/internal/*`)
+- **Data Access**: **Cross-tenant access** (elevated privileges)
+
+#### Why Internal Services Have Cross-Tenant Access
+
+**Rationale**: Internal services require elevated access for legitimate system operations:
+
+1. **Worker Services** (text_worker, chunk_worker, embed_worker)
+   - Must process documents from ALL tenants
+   - Cannot be scoped to single tenant
+
+2. **Admin/Monitoring Tools**
+   - Need system-wide statistics and health checks
+   - Must view documents across tenants for debugging
+
+3. **Analytics & Reporting**
+   - Aggregate metrics across the platform
+   - Usage tracking per tenant
+
+**Security Model**:
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ACCESS CONTROL MODEL                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  TENANT API (X-API-Key)         INTERNAL API (X-Internal)   │
+│  ─────────────────────          ─────────────────────────   │
+│  • Own documents only           • ALL documents             │
+│  • Own search results           • Cross-tenant search       │
+│  • Upload/Status/Search         • Admin/Stats/Health        │
+│  • Strict isolation ✓           • Elevated privileges ✓     │
+│                                                             │
+│  Use case: Customer apps        Use case: System services   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Alternative Considered**: Tenant-scoped internal tokens
+- **Rejected** because: Workers need to process jobs from any tenant's queue
+
+#### API Endpoints
+
+**Tenant Endpoints** (require `X-API-Key`):
+- `POST /upload/single` - Upload single file
+- `POST /upload/bulk` - Upload multiple files
+- `GET /status/{id}` - Check processing status
+- `POST /search` - Search own documents
+
+**Internal Endpoints** (require `X-Internal-Token`):
+- `GET /internal/auth` - Verify service authentication
+- `GET /internal/health` - Detailed health check
+- `GET /internal/stats` - System-wide statistics
+- `GET /internal/tenants` - List all tenants
+- `POST /internal/tenants` - Create new tenant
+- `DELETE /internal/tenants/{name}` - Delete tenant
+- `GET /internal/documents` - List documents (cross-tenant)
+- `GET /internal/documents/{id}` - Document details (cross-tenant)
+- `POST /internal/search` - Search (cross-tenant)
+
+**Production Upgrades**:
+1. Replace SHA-256 with bcrypt for API key hashing
+2. Add JWT tokens for session management
+3. Implement OAuth2 for enterprise SSO
+4. Add API key rotation mechanism
+5. ~~Add rate limiting enforcement~~ ✅ (implemented using Redis sliding window)
+6. Add audit logging for authentication events
+7. Add role-based access control (RBAC) for internal services
+8. Implement service mesh (Istio) for mTLS between services
 
 ## Scalability Design
 
-### Horizontal Scaling
+### Target Metrics
 
-- **API Layer**: Stateless, scale with load balancer
-- **Workers**: Scale independently per worker type
-- **Qdrant**: Cluster mode for 1M+ vectors
-- **PostgreSQL**: Read replicas for search queries
+| Metric | Target | How Achieved |
+|--------|--------|--------------|
+| **Total documents** | 1,000,000+ | Qdrant + PostgreSQL sharding |
+| **Documents/tenant** | 50,000 | Tenant filtering + indexes |
+| **Ingestion throughput** | 50K/24h | Horizontal worker scaling |
+| **Search latency** | <100ms | Payload index on `tenant_id` |
+
+### Horizontal Scaling Strategy
+
+#### API Layer
+- **Stateless design**: No session state, any instance can handle any request
+- **Load balancing**: Deploy behind nginx/ALB with health checks
+- **Scale trigger**: CPU > 70% or response time > 200ms
+- **Target**: 10+ instances for production
+
+#### Worker Scaling
+- **Independent scaling**: Each worker type scales separately
+- **Scaling formula**: 
+  - Text workers: 1 per 1000 docs/hour
+  - Chunk workers: 1 per 2000 docs/hour  
+  - Embed workers: 1 per 500 docs/hour (CPU-intensive)
+- **For 50K docs/24h**: ~3 text, ~2 chunk, ~5 embed workers
+
+#### Database Scaling (PostgreSQL)
+- **Current**: Single instance (prototype)
+- **Production path**:
+  1. Read replicas for status/search queries
+  2. Connection pooling (PgBouncer)
+  3. Table partitioning by `tenant_id` for 100+ tenants
+  4. Consider Citus for horizontal sharding at 10M+ rows
+
+#### Vector Store Scaling (Qdrant)
+- **Current**: Single node with payload index on `tenant_id`
+- **Production path**:
+  1. Enable sharding (automatic distribution)
+  2. Cluster mode with 3+ nodes for HA
+  3. HNSW parameters: `m=16, ef_construct=100` for 1M+ vectors
+  4. Separate collections per large tenant (>100K docs) if needed
 
 ### Performance Optimizations
 
-1. **Batch Processing**: Process chunks in batches (100-500)
-2. **Connection Pooling**: For PostgreSQL and Qdrant
-3. **Caching**: Redis cache for frequent queries
-4. **Parallel Workers**: Multiple workers per type
+1. **Payload Indexing**: Created `tenant_id` index in Qdrant for O(1) filtering
+2. **Batch Processing**: Embedding batch size = 100 chunks
+3. **Connection Pooling**: Recommended for PostgreSQL/Qdrant
+4. **Caching**: Redis for frequent queries (future)
+5. **Parallel Workers**: Multiple workers per type
 
-### Throughput Targets
+### Throughput Calculation
 
-- **50K docs/24h per tenant**: ~35 docs/min
-- **1M total docs**: Distributed across 20+ tenants
-- **Search latency**: <100ms with proper indexing
+```
+Target: 50,000 documents in 24 hours = 2,083 docs/hour = 35 docs/min
+
+Per document processing time (estimated):
+- Text extraction: 2-5 seconds
+- Chunking: 1-2 seconds  
+- Embedding (per chunk): 0.1 seconds × avg 10 chunks = 1 second
+- Total: ~5-8 seconds/document
+
+With 5 embed workers: 5 × 60/8 = ~37 docs/min ✓
+```
 
 ## Failure Handling
 
@@ -203,7 +332,7 @@ Upload → API → Object Storage → Queue → Text Extractor → Chunker → E
 
 **Collection**: `document_chunks`
 
-**Vector Size**: 1536 (OpenAI embeddings)
+**Vector Size**: 384 (BAAI/bge-small-en-v1.5 embeddings)
 
 **Distance Metric**: Cosine
 
@@ -290,14 +419,79 @@ Upload → API → Object Storage → Queue → Text Extractor → Chunker → E
    - Distributed tracing
    - Error tracking
 
+## Implemented Features (Beyond Basic Requirements)
+
+### Observability
+- **Correlation IDs**: Every request gets a unique correlation ID (`X-Correlation-ID` header)
+- **Response Time**: Response includes `X-Response-Time` header
+- **Structured Logging**: All logs include correlation ID for request tracing
+
+### Document Management
+- **Document Deletion**: `DELETE /documents/{id}` - Removes document, chunks, vectors, and files
+- **Tenant Metrics**: `GET /metrics/me` - Usage stats for authenticated tenant
+
+### Rate Limiting
+- **Sliding Window**: Redis-based rate limiting with configurable limits per tenant
+- **HTTP 429**: Returns "Too Many Requests" when limit exceeded
+
 ## Future Enhancements
 
-1. **Batch Embedding**: Process multiple chunks in single API call
-2. **Streaming**: Real-time processing for large documents
-3. **Advanced Chunking**: Semantic chunking with ML models
-4. **Multi-Model Support**: Support for different embedding models
-5. **Caching**: Cache embeddings for duplicate content
-6. **Analytics**: Usage metrics and performance monitoring
+1. **Webhook Notifications**: Notify on document processing completion (models defined)
+2. **Batch Embedding**: Process multiple chunks in single API call
+3. **Streaming**: Real-time processing for large documents
+4. **Advanced Chunking**: Semantic chunking with ML models
+5. **Multi-Model Support**: Support for different embedding models
+6. **Caching**: Cache embeddings for duplicate content
+7. **Prometheus Metrics**: Export metrics for monitoring
+8. **Tenant Quotas**: Storage and document limits per tenant
+
+## AWS Deployment (Terraform)
+
+Terraform scripts are provided in the `terraform/` directory for AWS deployment:
+
+```
+terraform/
+├── main.tf              # Main configuration
+├── variables.tf         # Input variables  
+├── outputs.tf           # Output values
+├── terraform.tfvars.example
+└── modules/
+    ├── vpc/            # VPC, subnets, NAT gateway
+    ├── ecs/            # ECS Fargate (API + workers)
+    ├── rds/            # PostgreSQL on RDS
+    ├── elasticache/    # Redis on ElastiCache
+    ├── s3/             # Document storage
+    ├── qdrant/         # Qdrant on EC2
+    └── alb/            # Application Load Balancer
+```
+
+### AWS Services Used
+
+| Local Service | AWS Equivalent |
+|---------------|----------------|
+| Docker Compose | ECS Fargate |
+| PostgreSQL | RDS PostgreSQL |
+| Redis | ElastiCache Redis |
+| MinIO | S3 |
+| Qdrant | EC2 with Docker |
+| - | ALB (load balancer) |
+| - | ECR (container registry) |
+| - | CloudWatch (logging) |
+| - | Secrets Manager |
+
+### Quick Deploy
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your values
+terraform init
+terraform apply
+```
+
+### Estimated Monthly Cost (Development)
+
+~$187/month for minimal configuration. See `terraform/README.md` for details.
 
 ## Conclusion
 
