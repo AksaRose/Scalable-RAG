@@ -29,7 +29,7 @@ The system consists of:
 ## Prerequisites
 
 - Docker and Docker Compose
-- OpenAI API key (for embeddings)
+- No API keys required (uses open-source embedding models)
 
 ## Quick Start
 
@@ -40,12 +40,14 @@ git clone <repository-url>
 cd Scalable-RAG
 ```
 
-2. **Set environment variables**
+2. **Set environment variables (optional)**
 
-Create a `.env` file (optional, defaults are provided):
+Create a `.env` file to customize the embedding model:
 
 ```bash
-OPENAI_API_KEY=your_openai_api_key_here
+# Optional: Change embedding model (default: BAAI/bge-small-en-v1.5)
+# Other options: all-MiniLM-L6-v2, all-mpnet-base-v2, BAAI/bge-base-en-v1.5
+EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 ```
 
 3. **Start the services**
@@ -187,7 +189,7 @@ Key configuration options in `shared/config.py`:
 - `CHUNK_SIZE`: Size of text chunks (default: 512 tokens)
 - `CHUNK_OVERLAP`: Overlap between chunks (default: 50 tokens)
 - `MAX_RETRIES`: Maximum retry attempts (default: 3)
-- `OPENAI_EMBEDDING_MODEL`: Embedding model (default: text-embedding-3-small)
+- `EMBEDDING_MODEL`: Embedding model (default: BAAI/bge-small-en-v1.5)
 - `MAX_FILE_SIZE`: Maximum file size (default: 100MB)
 
 ## Multi-Tenancy

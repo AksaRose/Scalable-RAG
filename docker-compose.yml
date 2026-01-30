@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: rag_password
       POSTGRES_DB: rag_db
     ports:
-      - "5432:5432"
+      - "5434:5432"  # Changed to 5434 to avoid conflict with local PostgreSQL and other containers
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d
@@ -26,16 +26,17 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/6333' || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
     container_name: scalable_rag_redis
     ports:
-      - "6379:6379"
+      - "6380:6379"  # Changed to 6380 to avoid conflict with local Redis
     volumes:
       - redis_data:/data
     healthcheck:
@@ -48,8 +49,8 @@ services:
     image: minio/minio:latest
     container_name: scalable_rag_minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9002:9000"  # Changed to 9002 to avoid conflict
+      - "9003:9001"  # Changed to 9003 to avoid conflict
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -77,7 +78,7 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       MINIO_BUCKET: documents
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,7 +147,7 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       MINIO_BUCKET: documents
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
     depends_on:
       - postgres
       - redis

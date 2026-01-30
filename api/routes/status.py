@@ -6,7 +6,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from shared.models import StatusResponse
 from shared.config import config
-from api.services.auth import AuthService
+from services.auth import AuthService
 import logging
 
 logger = logging.getLogger(__name__)

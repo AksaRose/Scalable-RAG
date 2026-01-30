@@ -8,8 +8,8 @@ from psycopg2.extras import RealDictCursor
 from shared.config import config
 from shared.models import UploadResponse, BulkUploadResponse
 from shared.queue import QueueClient
-from api.services.auth import AuthService
-from api.services.storage import StorageService
+from services.auth import AuthService
+from services.storage import StorageService
 import logging
 
 logger = logging.getLogger(__name__)

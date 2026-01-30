@@ -14,7 +14,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from shared.config import config
 from shared.queue import QueueClient
-from api.services.storage import StorageService
+from services.storage import StorageService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

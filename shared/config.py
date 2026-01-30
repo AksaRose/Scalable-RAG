@@ -11,7 +11,7 @@ class Config:
     # Qdrant
     QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
     QDRANT_COLLECTION_NAME: str = "document_chunks"
-    QDRANT_VECTOR_SIZE: int = 1536  # OpenAI text-embedding-3-small
+    QDRANT_VECTOR_SIZE: int = 384  # BAAI/bge-small-en-v1.5
     
     # Redis
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -23,10 +23,9 @@ class Config:
     MINIO_BUCKET: str = os.getenv("MINIO_BUCKET", "documents")
     MINIO_SECURE: bool = os.getenv("MINIO_SECURE", "false").lower() == "true"
     
-    # OpenAI
-    OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    OPENAI_BATCH_SIZE: int = 100
+    # Embedding Model (Open-source)
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+    EMBEDDING_BATCH_SIZE: int = 100
     
     # Chunking
     CHUNK_SIZE: int = 512  # tokens

@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY workers/ /app/workers/
 COPY shared/ /app/shared/
+COPY api/services/ /app/services/
 
 # Run the worker (command will be overridden in docker-compose)
 CMD ["python", "-m", "workers.text_extractor.worker"]

@@ -2,13 +2,25 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from typing import Optional
 from shared.models import SearchRequest, SearchResponse, SearchResult
-from api.services.auth import AuthService
-from api.services.qdrant_client import QdrantService
-import openai
+from services.auth import AuthService
+from services.qdrant_client import QdrantService
+from sentence_transformers import SentenceTransformer
 from shared.config import config
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Load embedding model once at startup
+_embedding_model = None
+
+def get_embedding_model():
+    """Get or initialize the embedding model."""
+    global _embedding_model
+    if _embedding_model is None:
+        logger.info(f"Loading embedding model: {config.EMBEDDING_MODEL}")
+        _embedding_model = SentenceTransformer(config.EMBEDDING_MODEL)
+        logger.info("Embedding model loaded successfully")
+    return _embedding_model
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -40,20 +52,14 @@ async def search_documents(
     tenant: dict = Depends(get_current_tenant)
 ):
     """Search documents using semantic search."""
-    if not config.OPENAI_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="OpenAI API key not configured"
-        )
-    
     try:
-        # Generate embedding for query
-        openai_client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
-        response = openai_client.embeddings.create(
-            model=config.OPENAI_EMBEDDING_MODEL,
-            input=request.query
-        )
-        query_vector = response.data[0].embedding
+        # Generate embedding for query using open-source model
+        embedding_model = get_embedding_model()
+        query_vector = embedding_model.encode(
+            request.query,
+            show_progress_bar=False,
+            convert_to_numpy=True
+        ).tolist()
         
         # Search in Qdrant
         qdrant_service = QdrantService()

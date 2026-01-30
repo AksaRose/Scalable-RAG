@@ -2,7 +2,7 @@
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
-from api.routes import upload, search, status
+from routes import upload, search, status
 import logging
 
 logging.basicConfig(level=logging.INFO)

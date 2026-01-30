@@ -14,11 +14,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import pandas as pd
-import openai
+from sentence_transformers import SentenceTransformer
 from shared.config import config
 from shared.queue import QueueClient
-from api.services.storage import StorageService
-from api.services.qdrant_client import QdrantService
+from services.storage import StorageService
+from services.qdrant_client import QdrantService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,10 +33,10 @@ class EmbedderWorker:
         self.qdrant_service = QdrantService()
         self.db_conn = psycopg2.connect(config.DATABASE_URL)
         
-        if not config.OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY not configured")
-        
-        self.openai_client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
+        # Load the embedding model (open-source)
+        logger.info(f"Loading embedding model: {config.EMBEDDING_MODEL}")
+        self.embedding_model = SentenceTransformer(config.EMBEDDING_MODEL)
+        logger.info("Embedding model loaded successfully")
     
     def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for a batch of texts.
@@ -48,11 +48,15 @@ class EmbedderWorker:
             List of embedding vectors
         """
         try:
-            response = self.openai_client.embeddings.create(
-                model=config.OPENAI_EMBEDDING_MODEL,
-                input=texts
+            # Generate embeddings using sentence-transformers
+            embeddings = self.embedding_model.encode(
+                texts,
+                batch_size=config.EMBEDDING_BATCH_SIZE,
+                show_progress_bar=False,
+                convert_to_numpy=True
             )
-            return [item.embedding for item in response.data]
+            # Convert to list of lists
+            return embeddings.tolist()
         except Exception as e:
             logger.error(f"Error generating embeddings: {e}")
             raise
