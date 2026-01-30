@@ -73,9 +73,8 @@ CREATE TRIGGER update_jobs_updated_at BEFORE UPDATE ON jobs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Insert a default tenant for testing (API key: test_api_key_123)
--- Password hash for 'test_api_key_123' using bcrypt (you should use proper hashing in production)
--- For now, we'll use a simple approach - in production use bcrypt or similar
+-- SHA256 hash of 'test_api_key_123': 3738a9db044b02c2849ff7eb06aa66659462b920e2368335229f25b144343fcf
 INSERT INTO tenants (tenant_id, name, api_key_hash, rate_limit) 
 VALUES 
-    ('00000000-0000-0000-0000-000000000001', 'test_tenant', 'test_api_key_123', 100)
+    ('00000000-0000-0000-0000-000000000001', 'test_tenant', '3738a9db044b02c2849ff7eb06aa66659462b920e2368335229f25b144343fcf', 100)
 ON CONFLICT (name) DO NOTHING;

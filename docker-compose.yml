@@ -79,6 +79,7 @@ services:
       MINIO_SECRET_KEY: minioadmin
       MINIO_BUCKET: documents
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-internal_service_secret_token}
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,8 +110,9 @@ services:
       - redis
       - minio
     volumes:
-      - ./workers:/app
+      - ./workers:/app/workers
       - ./shared:/app/shared
+      - ./api/services:/app/services
     command: python -m workers.text_extractor.worker
 
   chunk_worker:
@@ -130,8 +132,9 @@ services:
       - redis
       - minio
     volumes:
-      - ./workers:/app
+      - ./workers:/app/workers
       - ./shared:/app/shared
+      - ./api/services:/app/services
     command: python -m workers.chunker.worker
 
   embed_worker:
@@ -154,8 +157,9 @@ services:
       - qdrant
       - minio
     volumes:
-      - ./workers:/app
+      - ./workers:/app/workers
       - ./shared:/app/shared
+      - ./api/services:/app/services
     command: python -m workers.embedder.worker
 
 volumes:
