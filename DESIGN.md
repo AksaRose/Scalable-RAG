@@ -6,6 +6,90 @@ This document describes the design decisions, architecture, and trade-offs for t
 
 ## Architecture
 
+### High-Level Architecture Diagram
+
+```mermaid
+graph TB
+    Client[Client Applications] -->|HTTP/HTTPS| API[FastAPI Service]
+    API -->|Authenticate| Auth[Auth Service]
+    API -->|Queue Jobs| Queue[Redis Queue]
+    API -->|Store Metadata| Postgres[(PostgreSQL)]
+    API -->|Query Vectors| Qdrant[(Qdrant)]
+    
+    Queue -->|Process| TextWorker[Text Extraction Workers]
+    Queue -->|Process| ChunkWorker[Chunking Workers]
+    Queue -->|Process| EmbedWorker[Embedding Workers]
+    
+    TextWorker -->|Store| Storage[S3/MinIO]
+    ChunkWorker -->|Read/Write| Storage
+    EmbedWorker -->|Read/Write| Storage
+    EmbedWorker -->|Bulk Insert| Qdrant
+    
+    TextWorker -->|Update Status| Postgres
+    ChunkWorker -->|Update Status| Postgres
+    EmbedWorker -->|Update Status| Postgres
+```
+
+### Processing Pipeline Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant Queue
+    participant Storage
+    participant TextWorker
+    participant ChunkWorker
+    participant EmbedWorker
+    participant Qdrant
+    participant Postgres
+
+    Client->>API: Upload Document
+    API->>Storage: Store File
+    API->>Postgres: Create Document Record
+    API->>Queue: Enqueue Extract Job
+    API->>Client: Return Document ID
+
+    Queue->>TextWorker: Dequeue Extract Job
+    TextWorker->>Storage: Download File
+    TextWorker->>Storage: Store Extracted Text
+    TextWorker->>Postgres: Update Status
+    TextWorker->>Queue: Enqueue Chunk Job
+
+    Queue->>ChunkWorker: Dequeue Chunk Job
+    ChunkWorker->>Storage: Download Text
+    ChunkWorker->>Postgres: Store Chunks
+    ChunkWorker->>Storage: Store Chunk Files
+    ChunkWorker->>Queue: Enqueue Embed Jobs
+
+    Queue->>EmbedWorker: Dequeue Embed Job
+    EmbedWorker->>Storage: Download Chunk
+    EmbedWorker->>EmbedWorker: Generate Embedding (local model)
+    EmbedWorker->>Storage: Store Parquet
+    EmbedWorker->>Qdrant: Upsert Vector
+    EmbedWorker->>Postgres: Update Status
+```
+
+### Multi-Tenancy Architecture
+
+```mermaid
+graph LR
+    Tenant1[Tenant 1] -->|API Key 1| API
+    Tenant2[Tenant 2] -->|API Key 2| API
+    Tenant3[Tenant 3] -->|API Key 3| API
+    
+    API -->|Filter by tenant_id| Postgres[(PostgreSQL)]
+    API -->|Filter by tenant_id| Qdrant[(Qdrant)]
+    
+    Queue -->|Per-tenant queues| Queue1[Queue: tenant1:extract]
+    Queue -->|Per-tenant queues| Queue2[Queue: tenant2:extract]
+    Queue -->|Per-tenant queues| Queue3[Queue: tenant3:extract]
+    
+    Queue1 --> Worker[Workers]
+    Queue2 --> Worker
+    Queue3 --> Worker
+```
+
 ### System Components
 
 1. **API Service** (FastAPI)
@@ -14,23 +98,15 @@ This document describes the design decisions, architecture, and trade-offs for t
    - Manages authentication and authorization
 
 2. **Processing Workers**
-   - **Text Extractor**: Extracts text from PDF and TXT files
-   - **Chunker**: Segments text into overlapping chunks
-   - **Embedder**: Generates embeddings and stores in Qdrant
+   - **Text Extractor**: Extracts text from PDF and TXT files using pypdf
+   - **Chunker**: Segments text into overlapping chunks with sentence-aware breaking
+   - **Embedder**: Generates embeddings using sentence-transformers (BAAI/bge-small-en-v1.5)
 
 3. **Storage Systems**
    - **PostgreSQL**: Metadata, job tracking, tenant management
-   - **Qdrant**: Vector database for semantic search
-   - **MinIO**: Object storage for files and intermediate data
-   - **Redis**: Job queue for async processing
-
-### Data Flow
-
-```
-Upload → API → Object Storage → Queue → Text Extractor → Chunker → Embedder → Qdrant
-                                                                    ↓
-                                                              Parquet Storage
-```
+   - **Qdrant**: Vector database for semantic search (384 dimensions)
+   - **MinIO**: Object storage for files and intermediate data (Parquet)
+   - **Redis**: Job queue with sorted sets for per-tenant fairness
 
 ## Key Design Decisions
 
@@ -288,7 +364,94 @@ With 5 embed workers: 5 × 60/8 = ~37 docs/min ✓
 
 ## Data Model
 
-### PostgreSQL Schema
+### Entity Relationship Diagram
+
+```mermaid
+erDiagram
+    tenants ||--o{ documents : "has"
+    tenants ||--o{ chunks : "has"
+    tenants ||--o{ jobs : "has"
+    documents ||--o{ chunks : "contains"
+    documents ||--o{ jobs : "has"
+
+    tenants {
+        uuid tenant_id PK
+        varchar name UK
+        varchar api_key_hash UK
+        integer rate_limit
+        timestamp created_at
+    }
+
+    documents {
+        uuid document_id PK
+        uuid tenant_id FK
+        varchar filename
+        varchar status
+        varchar file_path
+        bigint file_size
+        jsonb metadata
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    chunks {
+        uuid chunk_id PK
+        uuid document_id FK
+        uuid tenant_id FK
+        integer chunk_index
+        text text
+        varchar embedding_path
+        jsonb metadata
+        timestamp created_at
+    }
+
+    jobs {
+        uuid job_id PK
+        uuid tenant_id FK
+        uuid document_id FK
+        varchar job_type
+        varchar status
+        text error_message
+        integer retry_count
+        integer max_retries
+        timestamp created_at
+        timestamp updated_at
+    }
+```
+
+### Qdrant Collection Structure
+
+```mermaid
+graph TB
+    Collection[document_chunks Collection]
+    
+    Collection --> Vector[Vector: 384 dimensions]
+    Collection --> Payload[Payload Metadata]
+    
+    Payload --> TenantID[tenant_id: string]
+    Payload --> DocID[document_id: string]
+    Payload --> ChunkID[chunk_id: string]
+    Payload --> Text[text: string]
+    Payload --> Filename[filename: string]
+    Payload --> ChunkIndex[chunk_index: integer]
+    Payload --> Metadata[metadata: object]
+```
+
+### Data Flow Relationships
+
+```mermaid
+graph LR
+    Upload[File Upload] --> Doc[Document Record]
+    Doc --> ExtractJob[Extract Job]
+    ExtractJob --> Text[Extracted Text]
+    Text --> ChunkJob[Chunk Job]
+    ChunkJob --> Chunks[Chunk Records]
+    Chunks --> EmbedJob[Embed Job]
+    EmbedJob --> Embedding[Embedding Vector]
+    Embedding --> QdrantPoint[Qdrant Point]
+```
+
+### PostgreSQL Schema Details
 
 **tenants**
 - `tenant_id` (UUID, PK)
@@ -301,7 +464,7 @@ With 5 embed workers: 5 × 60/8 = ~37 docs/min ✓
 - `document_id` (UUID, PK)
 - `tenant_id` (UUID, FK)
 - `filename` (VARCHAR)
-- `status` (VARCHAR)
+- `status` (VARCHAR: pending, processing, completed, failed)
 - `file_path` (VARCHAR)
 - `file_size` (BIGINT)
 - `metadata` (JSONB)
@@ -321,12 +484,28 @@ With 5 embed workers: 5 × 60/8 = ~37 docs/min ✓
 - `job_id` (UUID, PK)
 - `tenant_id` (UUID, FK)
 - `document_id` (UUID, FK)
-- `job_type` (VARCHAR)
-- `status` (VARCHAR)
+- `job_type` (VARCHAR: extract, chunk, embed)
+- `status` (VARCHAR: pending, processing, completed, failed)
 - `error_message` (TEXT)
 - `retry_count` (INTEGER)
-- `max_retries` (INTEGER)
+- `max_retries` (INTEGER, default: 3)
 - `created_at`, `updated_at` (TIMESTAMP)
+
+### Database Indexes
+
+**PostgreSQL Indexes**
+- `idx_documents_tenant_id`: On documents(tenant_id)
+- `idx_documents_status`: On documents(status)
+- `idx_chunks_document_id`: On chunks(document_id)
+- `idx_chunks_tenant_id`: On chunks(tenant_id)
+- `idx_jobs_tenant_id`: On jobs(tenant_id)
+- `idx_jobs_document_id`: On jobs(document_id)
+- `idx_jobs_status`: On jobs(status)
+- `idx_jobs_type`: On jobs(job_type)
+
+**Qdrant Indexes**
+- HNSW index on vectors (automatic)
+- Payload index on `tenant_id` (for fast filtering)
 
 ### Qdrant Collection
 
@@ -336,14 +515,14 @@ With 5 embed workers: 5 × 60/8 = ~37 docs/min ✓
 
 **Distance Metric**: Cosine
 
-**Payload**:
-- `tenant_id` (string)
-- `document_id` (string)
-- `chunk_id` (string)
-- `text` (string)
-- `filename` (string)
-- `chunk_index` (integer)
-- `metadata` (object)
+**Payload Fields**:
+- `tenant_id` (string) - For multi-tenant filtering
+- `document_id` (string) - Reference to source document
+- `chunk_id` (string) - Unique chunk identifier
+- `text` (string) - Original chunk text
+- `filename` (string) - Source filename
+- `chunk_index` (integer) - Position in document
+- `metadata` (object) - Additional metadata
 
 ## Trade-offs
 

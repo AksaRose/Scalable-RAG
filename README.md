@@ -11,6 +11,14 @@ A production-ready document ingestion service for RAG (Retrieval-Augmented Gener
 - **Scalable Architecture**: Designed to handle 1M+ documents across multiple tenants
 - **Vector Search**: Semantic search using Qdrant vector database
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[DESIGN.md](DESIGN.md)** | Complete design document with architecture diagrams, ER diagrams, design decisions, trade-offs, and scalability strategy |
+| **[terraform/README.md](terraform/README.md)** | AWS deployment guide using Terraform |
+| **[API Docs](http://localhost:8000/docs)** | Interactive Swagger documentation (after starting services) |
+
 ## Architecture
 
 The system consists of:
