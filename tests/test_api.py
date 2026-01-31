@@ -99,16 +99,14 @@ class TestUpload:
 class TestSearch:
     """Tests for search endpoints."""
     
-    @patch('api.routes.search.openai.OpenAI')
+    @patch('api.routes.search.SentenceTransformer')
     @patch('api.routes.search.QdrantService')
-    def test_search_success(self, mock_qdrant, mock_openai, mock_auth_service, mock_tenant):
+    def test_search_success(self, mock_qdrant, mock_sentence_transformer, mock_auth_service, mock_tenant):
         """Test successful search."""
-        # Mock OpenAI
-        mock_openai_instance = Mock()
-        mock_embedding = Mock()
-        mock_embedding.data = [Mock(embedding=[0.1] * 1536)]
-        mock_openai_instance.embeddings.create.return_value = mock_embedding
-        mock_openai.return_value = mock_openai_instance
+        # Mock SentenceTransformer
+        mock_model_instance = Mock()
+        mock_model_instance.encode.return_value = [[0.1] * 384]  # 384 dimensions for bge-small
+        mock_sentence_transformer.return_value = mock_model_instance
         
         # Mock Qdrant
         mock_qdrant_instance = Mock()

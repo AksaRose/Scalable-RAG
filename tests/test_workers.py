@@ -78,17 +78,15 @@ class TestEmbedder:
     @patch('workers.embedder.worker.QdrantService')
     @patch('workers.embedder.worker.QueueClient')
     @patch('workers.embedder.worker.psycopg2.connect')
-    @patch('workers.embedder.worker.openai.OpenAI')
-    def test_generate_embeddings(self, mock_openai, mock_db, mock_queue, mock_qdrant, mock_storage):
+    @patch('workers.embedder.worker.SentenceTransformer')
+    def test_generate_embeddings(self, mock_sentence_transformer, mock_db, mock_queue, mock_qdrant, mock_storage):
         """Test embedding generation."""
         from workers.embedder.worker import EmbedderWorker
         
-        # Mock OpenAI
-        mock_openai_instance = Mock()
-        mock_embedding = Mock()
-        mock_embedding.data = [Mock(embedding=[0.1] * 1536)]
-        mock_openai_instance.embeddings.create.return_value = mock_embedding
-        mock_openai.return_value = mock_openai_instance
+        # Mock SentenceTransformer
+        mock_model_instance = Mock()
+        mock_model_instance.encode.return_value = [[0.1] * 384]  # 384 dimensions for bge-small
+        mock_sentence_transformer.return_value = mock_model_instance
         
         worker = EmbedderWorker()
         
@@ -96,4 +94,4 @@ class TestEmbedder:
         embeddings = worker.generate_embeddings(texts)
         
         assert len(embeddings) == 1
-        assert len(embeddings[0]) == 1536
+        assert len(embeddings[0]) == 384
